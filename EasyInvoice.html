@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>EasyInvoice Pro - 智能打印助手</title>
+    <!-- 依赖库 -->
+    <script src="https://unpkg.com/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    
+    <style>
+        :root {
+            --sidebar-width: 360px;
+            --primary-color: #007bff;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --header-bg: #212529;
+        }
+
+        body { 
+            margin: 0; padding: 0; font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            display: flex; height: 100vh; background-color: #525659; overflow: hidden;
+        }
+
+        /* --- 左侧操作区 --- */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: #fff;
+            box-shadow: 2px 0 15px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            z-index: 100;
+        }
+
+        .sidebar-header { background: var(--header-bg); color: #fff; padding: 18px; text-align: center; }
+        .sidebar-header h2 { margin: 0; font-size: 18px; letter-spacing: 1px; }
+
+        .sidebar-content { padding: 15px; flex-grow: 1; overflow-y: auto; }
+
+        /* 金额统计卡片 */
+        .summary-card {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .summary-card .label { font-size: 12px; color: #666; margin-bottom: 5px; display: block; }
+        .summary-card .total-amt { font-size: 24px; font-weight: bold; color: var(--primary-color); font-family: "DIN Condensed", "Consolas", sans-serif; }
+
+        /* 上传按钮 */
+        .upload-box {
+            border: 2px dashed var(--primary-color);
+            border-radius: 8px; padding: 15px; text-align: center;
+            background: #f0f7ff; cursor: pointer; transition: 0.3s; margin-bottom: 20px;
+        }
+        .upload-box:hover { background: #e1efff; }
+
+        /* 列表管理 */
+        .list-header { font-size: 13px; font-weight: bold; color: #555; margin-bottom: 8px; display: flex; justify-content: space-between; }
+        #fileList { border: 1px solid #dee2e6; border-radius: 6px; background: #fff; }
+        .file-item { 
+            padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #eee; 
+            display: flex; align-items: center; background: #fff; cursor: grab;
+        }
+        .file-item:last-child { border-bottom: none; }
+        .file-item .handle { color: #ccc; margin-right: 10px; }
+        .file-item .name { flex-grow: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #333; }
+        
+        /* 金额标签 - 可编辑样式 */
+        .amt-tag { 
+            font-weight: bold; color: #d32f2f; background: #fff1f0; padding: 2px 6px; 
+            border-radius: 4px; font-size: 12px; margin-left: 5px; min-width: 70px; 
+            text-align: right; cursor: text; border: 1px solid transparent; transition: 0.2s;
+        }
+        .amt-tag:hover { border: 1px dashed #d32f2f; background: #fff; }
+        .amt-tag:focus { outline: none; border: 1px solid #d32f2f; background: #fff; box-shadow: 0 0 5px rgba(211,47,47,0.2); }
+
+        .file-item .remove-btn { color: #ccc; cursor: pointer; font-size: 18px; padding-left: 10px; }
+        .file-item .remove-btn:hover { color: var(--danger-color); }
+
+        /* --- 右侧预览区 --- */
+        .main-preview { 
+            flex-grow: 1; overflow-y: auto; padding: 40px; 
+            display: flex; flex-direction: column; align-items: center; 
+        }
+        .a4-page {
+            width: 210mm; height: 297mm; background: white; margin-bottom: 35px;
+            display: flex; flex-direction: column; box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            flex-shrink: 0; position: relative;
+        }
+        .invoice-slot { 
+            width: 100%; height: 50%; display: flex; justify-content: center; 
+            align-items: center; overflow: hidden; border-bottom: 1px dashed #ddd; 
+        }
+        .invoice-slot:last-child { border-bottom: none; }
+        canvas, img { max-width: 96%; max-height: 96%; object-fit: contain; }
+
+        .sidebar-footer { padding: 15px; border-top: 1px solid #eee; background: #f8f9fa; }
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 15px; font-weight: bold; cursor: pointer; margin-bottom: 10px; transition: 0.2s; }
+        .btn-print { background: var(--success-color); color: white; box-shadow: 0 4px 10px rgba(40,167,69,0.2); }
+        .btn-print:disabled { background: #ccc; box-shadow: none; cursor: not-allowed; }
+
+        #fileInput { display: none; }
+        #loading { position: fixed; top: 20px; right: 20px; background: rgba(0,0,0,0.8); color: #fff; padding: 10px 20px; border-radius: 20px; display: none; z-index: 1000; font-size: 13px; }
+
+        @media print {
+            .sidebar { display: none; }
+            body { background: white; }
+            .main-preview { padding: 0; overflow: visible; display: block; }
+            .a4-page { margin: 0; box-shadow: none; }
+            .invoice-slot { border-bottom: 1px dashed #ccc; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading">🚀 智能提取金额中...</div>
+
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>EasyInvoice</h2>
+        </div>
+        
+        <div class="sidebar-content">
+            <div class="summary-card">
+                <span class="label">金额合计</span>
+                <span class="total-amt" id="totalAmountDisplay">￥0.00</span>
+            </div>
+
+            <div class="upload-box" id="uploadTrigger">
+                <i>➕</i> <span>添加发票文件</span>
+                <input type="file" id="fileInput" multiple accept="image/*,application/pdf">
+            </div>
+
+            <div class="list-header">
+                <span>打印队列 (可排序/编辑)</span>
+                <span id="fileCount" style="color:#999; font-weight:normal;">0 张</span>
+            </div>
+            <div id="fileList"></div>
+        </div>
+
+        <div class="sidebar-footer">
+            <button id="printBtn" class="btn btn-print" disabled onclick="window.print()">🖨️ 确认打印 (A4)</button>
+            <button class="btn" style="background:#fff; border:1px solid #ccc; color:#666;" onclick="clearAll()">清空全部数据</button>
+        </div>
+    </div>
+
+    <div class="main-preview" id="mainPreview">
+        <div id="printContainer"></div>
+    </div>
+
+    <script>
+        const pdfjsLib = window['pdfjs-dist/build/pdf'];
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
+        const CMAP_URL = 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/';
+
+        let invoiceData = []; 
+
+        const fileInput = document.getElementById('fileInput');
+        const uploadTrigger = document.getElementById('uploadTrigger');
+        const fileListContainer = document.getElementById('fileList');
+        const printContainer = document.getElementById('printContainer');
+        const printBtn = document.getElementById('printBtn');
+        const totalAmountDisplay = document.getElementById('totalAmountDisplay');
+        const loadingHint = document.getElementById('loading');
+
+        new Sortable(fileListContainer, { animation: 200, handle: '.file-item', onEnd: syncDataOrder });
+
+        uploadTrigger.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length === 0) return;
+
+            loadingHint.style.display = 'block';
+            for (const file of files) {
+                const amount = await extractPostTaxAmount(file);
+                invoiceData.push({
+                    file: file,
+                    amount: amount,
+                    id: Math.random().toString(36).substr(2, 9)
+                });
+            }
+            fileInput.value = '';
+            updateUI();
+        });
+
+        // 核心识别逻辑：专门提取“价税合计”
+        async function extractPostTaxAmount(file) {
+            if (file.type !== 'application/pdf') return 0;
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({
+                    data: arrayBuffer,
+                    cMapUrl: CMAP_URL,
+                    cMapPacked: true,
+                }).promise;
+                const page = await pdf.getPage(1);
+                const textContent = await page.getTextContent();
+                const fullText = textContent.items.map(item => item.str).join('').replace(/\s+/g, '');
+                
+                // 寻找：价税合计（包含大写描述后）的（小写）数值
+                const regex = /(?:价税合计.*?小写).*?[￥¥]?([\d,]+\.\d{2})/;
+                const match = fullText.match(regex);
+                
+                if (match) {
+                    return parseFloat(match[1].replace(/,/g, ''));
+                } else {
+                    const allAmounts = fullText.match(/[\d,]+\.\d{2}/g);
+                    if (allAmounts) return parseFloat(allAmounts[allAmounts.length - 1].replace(/,/g, ''));
+                }
+            } catch (e) { console.warn("识别失败", e); }
+            return 0;
+        }
+
+        async function updateUI() {
+            renderList();
+            await renderPreview();
+            updateSummary();
+            loadingHint.style.display = 'none';
+        }
+
+        function renderList() {
+            fileListContainer.innerHTML = invoiceData.length === 0 ? '<div style="color:#ccc; text-align:center; padding:20px; font-size:12px;">暂无文件</div>' : '';
+            invoiceData.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'file-item';
+                div.dataset.id = item.id;
+                // 金额标签增加 contenteditable="true" 和 onblur 监听
+                div.innerHTML = `
+                    <span class="handle">☰</span>
+                    <span class="name" title="${item.file.name}">${item.file.name}</span>
+                    <span class="amt-tag" contenteditable="true" onblur="manualEditAmount('${item.id}', this)" onkeydown="checkEnter(event)">￥${item.amount.toFixed(2)}</span>
+                    <span class="remove-btn" onclick="removeFile('${item.id}')">×</span>
+                `;
+                fileListContainer.appendChild(div);
+            });
+        }
+
+        // 手动修改金额的处理函数
+        function manualEditAmount(id, el) {
+            // 提取输入中的纯数字和小数点
+            let inputVal = el.innerText.replace(/[^\d.]/g, '');
+            let newAmount = parseFloat(inputVal);
+            
+            if (isNaN(newAmount)) newAmount = 0;
+
+            // 更新数据源
+            const dataItem = invoiceData.find(d => d.id === id);
+            if (dataItem) {
+                dataItem.amount = newAmount;
+                // 格式化回显
+                el.innerText = `￥${newAmount.toFixed(2)}`;
+                updateSummary();
+            }
+        }
+
+        // 敲回车时自动失去焦点，触发保存
+        function checkEnter(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                e.target.blur();
+            }
+        }
+
+        async function renderPreview() {
+            printContainer.innerHTML = '';
+            const pageCount = Math.ceil(invoiceData.length / 2);
+            for (let i = 0; i < pageCount; i++) {
+                const page = document.createElement('div');
+                page.className = 'a4-page';
+                for (let j = 0; j < 2; j++) {
+                    const slot = document.createElement('div');
+                    slot.className = 'invoice-slot';
+                    page.appendChild(slot);
+                    const idx = i * 2 + j;
+                    if (invoiceData[idx]) await drawInvoice(invoiceData[idx].file, slot);
+                }
+                printContainer.appendChild(page);
+            }
+        }
+
+        async function drawInvoice(file, container) {
+            const url = URL.createObjectURL(file);
+            if (file.type === 'application/pdf') {
+                const pdf = await pdfjsLib.getDocument({url: url, cMapUrl: CMAP_URL, cMapPacked: true}).promise;
+                const page = await pdf.getPage(1);
+                const canvas = document.createElement('canvas');
+                const viewport = page.getViewport({ scale: 2.2 });
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport, intent: 'print' }).promise;
+                container.appendChild(canvas);
+            } else {
+                const img = document.createElement('img'); img.src = url; container.appendChild(img);
+            }
+        }
+
+        function updateSummary() {
+            const total = invoiceData.reduce((sum, item) => sum + item.amount, 0);
+            totalAmountDisplay.innerText = `￥${total.toFixed(2)}`;
+            document.getElementById('fileCount').innerText = invoiceData.length;
+            printBtn.disabled = invoiceData.length === 0;
+        }
+
+        function removeFile(id) {
+            invoiceData = invoiceData.filter(d => d.id !== id);
+            updateUI();
+        }
+
+        function syncDataOrder() {
+            const newOrder = [];
+            fileListContainer.querySelectorAll('.file-item').forEach(dom => {
+                newOrder.push(invoiceData.find(d => d.id === dom.dataset.id));
+            });
+            invoiceData = newOrder;
+            renderPreview();
+        }
+
+        function clearAll() {
+            if(confirm("确定清空所有数据？")) { invoiceData = []; updateUI(); }
+        }
+    </script>
+</body>
+</html>
